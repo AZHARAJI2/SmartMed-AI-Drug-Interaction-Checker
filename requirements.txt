@@ -1,0 +1,38 @@
+# Drug Package Image Interaction Checker — pinned requirements
+# Environment: Windows, Python 3.12, CPU-only.
+# Install:  python -m venv .venv
+#           .venv\Scripts\python -m pip install -r requirements.txt
+
+# --- Deep learning / vision (Phase 1) ---
+torch==2.11.0
+torchvision==0.26.0
+easyocr==1.7.2              # OCR path: text detection + CRNN reading
+opencv-python-headless==4.8.1.78  # provides cv2 (CLAHE, sharpness, overlay); 4.13+/5.x force numpy>=2
+Pillow==10.1.0
+numpy==1.26.4
+
+# --- Data / ML tooling ---
+pandas==2.3.1
+scikit-learn==1.7.0         # metrics + stratified splits
+
+# --- Backend (Phase 2) ---
+SQLAlchemy==2.0.36
+FastAPI==0.141.1
+uvicorn==0.30.0
+pydantic==2.10.4
+python-multipart==0.0.32
+rapidfuzz==3.13.0           # fuzzy matching (stdlib difflib fallback exists)
+passlib==1.7.4              # password hashing
+bcrypt==5.0.0
+python-jose==3.3.0          # JWT (stdlib HS256 fallback exists)
+
+# --- Frontend & Reporting (Phase 3) ---
+streamlit==1.50.0
+httpx==0.28.1               # UI API client + FastAPI TestClient
+requests==2.32.4
+reportlab==5.0.1            # Medical PDF report generation
+arabic-reshaper==3.0.1      # Arabic text reshaping for PDF (RTL support)
+python-bidi==0.6.11         # Bidirectional text algorithm for Arabic PDF
+
+# --- Testing ---
+pytest==9.0.2
