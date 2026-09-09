@@ -6,7 +6,15 @@ import streamlit as st
 from config import CONFIG
 from ui.api_client import ApiClient, ApiError
 from ui.pdf_report import generate_patient_pdf_report
-from ui.widgets import COMMON_NAMES_MAP, REVIEW_STATUS_AR, render_report, render_scan_view
+from ui.widgets import (
+    COMMON_NAMES_MAP,
+    REVIEW_STATUS_AR,
+    SEVERITY_AR,
+    find_interaction_for_pair,
+    render_pair_card_and_editor,
+    render_report,
+    render_scan_view,
+)
 
 
 def _client() -> ApiClient:
@@ -70,6 +78,36 @@ def _render_medication_basket() -> None:
         try:
             report = _client().doctor_check(basket)
             render_report(report)
+
+            # ── Dedicated Pairwise Cards with Doctor Editing ──────────
+            st.markdown("---")
+            st.markdown("#### 🩺 بطاقات التفاعلات الزوجية وقرار الطبيب (الدواء الأول + الثاني + قيمة التعارض):")
+            st.caption("يوضح هذا القسم كل زوج من الأدوية على حدة، مع إمكانية تعديل اسم أي دواء أو تغيير حكم التعارض (يوجد / لا يوجد تعارض) واعتماد ذلك فوراً:")
+
+            findings = report.get("findings") or []
+
+            def on_basket_update(old_a, old_b, new_a, new_b):
+                if old_a in st.session_state.doctor_basket and new_a != old_a:
+                    idx = st.session_state.doctor_basket.index(old_a)
+                    st.session_state.doctor_basket[idx] = new_a
+                if old_b in st.session_state.doctor_basket and new_b != old_b:
+                    idx = st.session_state.doctor_basket.index(old_b)
+                    st.session_state.doctor_basket[idx] = new_b
+
+            pair_idx = 0
+            for i in range(len(basket)):
+                for j in range(i + 1, len(basket)):
+                    pair_idx += 1
+                    da, db = basket[i], basket[j]
+                    pair_finding = find_interaction_for_pair(da, db, findings)
+                    render_pair_card_and_editor(
+                        drug_a=da,
+                        drug_b=db,
+                        finding=pair_finding,
+                        client=_client(),
+                        key_prefix=f"doc_bkt_pair_{pair_idx}_{da}_{db}",
+                        on_drug_name_change=on_basket_update,
+                    )
 
             # PDF Download option for doctor/pharmacist
             med_list = [{"drug_name": d, "drug_id": i + 1} for i, d in enumerate(basket)]
@@ -164,17 +202,29 @@ def _render_scan() -> None:
 
     input_mode = st.radio(
         "طريقة إدخال الصورة",
-        ["📸 تصوير مباشر بالكاميرا", "📁 رفع صورة من الجهاز"],
+        ["📁 رفع صورة من الجهاز", "📸 تصوير مباشر بالكاميرا"],
+        index=0,
         horizontal=True,
         key="doctor_input_mode",
     )
     image_bytes = None
     image_name = "package.jpg"
     if input_mode == "📸 تصوير مباشر بالكاميرا":
-        cam = st.camera_input("وجّه الكاميرا نحو علبة أو شريط الدواء بوضوح", key="doctor_cam")
-        if cam is not None:
-            image_bytes = cam.getvalue()
-            image_name = "doctor_cam.jpg"
+        if not st.session_state.get("doctor_cam_open", False):
+            st.info("💡 الكاميرا مغلقة حاليًا للحفاظ على الخصوصية. انقر أدناه لبدء التصوير:")
+            if st.button("📷 تشغيل الكاميرا للتصوير", type="primary", key="btn_open_doctor_cam"):
+                st.session_state.doctor_cam_open = True
+                st.rerun()
+        else:
+            col_cam_h, col_cam_c = st.columns([4, 1])
+            col_cam_h.caption("🟢 الكاميرا قيد التشغيل — وجّه الكاميرا نحو علبة أو شريط الدواء بوضوح:")
+            if col_cam_c.button("❌ إيقاف الكاميرا", key="btn_close_doctor_cam"):
+                st.session_state.doctor_cam_open = False
+                st.rerun()
+            cam = st.camera_input("وجّه الكاميرا نحو علبة أو شريط الدواء بوضوح", key="doctor_cam")
+            if cam is not None:
+                image_bytes = cam.getvalue()
+                image_name = "doctor_cam.jpg"
     else:
         upload = st.file_uploader("صورة عبوة الدواء", type=["jpg", "jpeg", "png"], key="doctor_scan")
         if upload is not None:
@@ -231,81 +281,144 @@ def _render_scan() -> None:
 
 
 def _render_review() -> None:
-    st.subheader("✍️ تدريب الذكاء الاصطناعي ومراجعة الفحوصات")
-    st.info(
-        "💡 **كيف يعمل هذا القسم؟**\n\n"
-        "هذا القسم مخصص للصيادلة والأطباء لتعليم النظام وتطوير دقته.\n"
-        "عندما يتعرف النظام على صورة أو نص دواء بشكل خاطئ أو غير مكتمل، اختر الفحص من القائمة أدناه وحدد الدواء الصحيح، "
-        "وسيقوم النظام بحفظ هذا التصحيح في القاموس الذكي ليتعرف عليه مستقبلاً بدقة 100% تلقائيًا."
-    )
+    st.subheader("✍️ مراجعة وتدريب النظام (تعديل الأدوية والتعارضات)")
 
-    try:
-        scans = _client().recent_scans(limit=30)
-    except ApiError as exc:
-        st.error(f"تعذر جلب الفحوصات الأخيرة: {exc}")
-        scans = []
+    rev_tabs = st.tabs([
+        "🩺 مراجعة وتعديل التعارض بين دواءين",
+        "📷 مراجعة وتصحيح قراءة العبوات (OCR)",
+    ])
 
-    if not scans:
-        st.warning("لا توجد فحوصات مسجلة بعد. قم بتصوير عبوة دواء في تبويب (📷 فحص صورة عبوة) لتظهر هنا.")
-        return
+    # ── TAB 1: Review and modify interaction between two drugs ──────────────
+    with rev_tabs[0]:
+        st.markdown("### 🩺 مراجعة وتعديل حكم التعارض الدوائي لزوج محدد")
+        st.info(
+            "💡 **ماذا يراجع الطبيب أو الصيدلاني هنا؟**\n\n"
+            "1. **مراجعة وتعديل أسماء الأدوية**: تصحيح اسم الدواء الأول واسم الدواء الثاني.\n"
+            "2. **مراجعة وتعديل قيمة التعارض**: تقرير ما إذا كان (يوجد تعارض دوائي ⚠️) أو (لا يوجد تعارض ✅) وتحديد درجة الخطورة والملاحظات السريرية.\n"
+            "3. **اعتماد القرار**: يُحفظ التعديل في قاعدة البيانات فوراً ليطبق في كافة الفحوصات والتقارير المستقبلية."
+        )
 
-    # Build human-readable options so the pharmacist never has to guess a Scan ID!
-    scan_options = {}
-    for s in scans:
-        s_id = s["scan_id"]
-        ocr_preview = (s["ocr_raw_text"] or "").replace("\n", " ").strip()
-        if len(ocr_preview) > 35:
-            ocr_preview = ocr_preview[:32] + "..."
-        ocr_preview = ocr_preview or "بدون نص"
-        res = s.get("classifier_prediction") or s.get("matched_drug_id") or "غير محدد"
-        status_ar = REVIEW_STATUS_AR.get(s["review_status"], s["review_status"])
-        label = f"فحص #{s_id} | النص: [{ocr_preview}] | النتيجة: [{res}] | الحالة: [{status_ar}]"
-        scan_options[label] = s
+        basket = st.session_state.get("doctor_basket", [])
+        default_d1 = basket[0] if len(basket) >= 1 else "Aspirin"
+        default_d2 = basket[1] if len(basket) >= 2 else "Warfarin"
 
-    selected_label = st.selectbox("📌 اختر الفحص الذي تريد مراجعته أو تصحيحه:", list(scan_options.keys()))
-    selected_scan = scan_options[selected_label]
+        col_inp1, col_inp2 = st.columns(2)
+        with col_inp1:
+            d1_input = st.text_input("اسم الدواء الأول المراد فحصه ومراجعته:", value=default_d1, key="rev_pair_d1_input")
+        with col_inp2:
+            d2_input = st.text_input("اسم الدواء الثاني المراد فحصه ومراجعته:", value=default_d2, key="rev_pair_d2_input")
 
-    st.markdown("---")
-    col1, col2 = st.columns(2)
-    with col1:
-        st.markdown(f"**رقم الفحص (Scan ID):** `{selected_scan['scan_id']}`")
-        st.markdown(f"**حالة المراجعة الحالية:** `{REVIEW_STATUS_AR.get(selected_scan['review_status'], selected_scan['review_status'])}`")
-        if selected_scan.get("reviewed_by"):
-            st.markdown(f"**تمت المراجعة بواسطة:** `{selected_scan['reviewed_by']}`")
-    with col2:
-        st.markdown(f"**توقع النموذج:** `{selected_scan.get('classifier_prediction') or '—'}`")
-        st.markdown(f"**نسبة الثقة:** `{selected_scan.get('fused_confidence', 0):.0%}`")
+        # Optional quick suggestions from DB
+        with st.expander("💡 اقتراحات وبحث سريع من قاعدة البيانات"):
+            q_col1, q_col2 = st.columns(2)
+            with q_col1:
+                s_query1 = st.text_input("ابحث في أسماء أدوية القاعدة (للدواء الأول)", key="s_q1")
+                if s_query1:
+                    cands1 = _client().search_drugs(s_query1, limit=6)
+                    if cands1:
+                        st.caption("أدوية مطابقة: " + " | ".join(f"`{c['trade_name']}`" for c in cands1))
+            with q_col2:
+                s_query2 = st.text_input("ابحث في أسماء أدوية القاعدة (للدواء الثاني)", key="s_q2")
+                if s_query2:
+                    cands2 = _client().search_drugs(s_query2, limit=6)
+                    if cands2:
+                        st.caption("أدوية مطابقة: " + " | ".join(f"`{c['trade_name']}`" for c in cands2))
 
-    raw_text = st.text_area(
-        "النص الخام الذي قرأه الـ OCR من العبوة (يمكنك تعديله لتدريب الكلمات الدقيقة):",
-        value=selected_scan.get("ocr_raw_text", ""),
-        height=70,
-        key=f"rev_ocr_{selected_scan['scan_id']}",
-    )
+        if d1_input.strip() and d2_input.strip():
+            st.markdown("---")
+            st.markdown("#### 📋 نتيجة الفحص الحالي مع إمكانية التعديل والاعتماد المباشر:")
 
-    st.markdown("#### حدد الدواء الصحيح من قاعدة البيانات:")
-    query = st.text_input("ابحث باسم الدواء التجاري أو العلمي (مثال: Panadol أو Aspirin)", key=f"rev_q_{selected_scan['scan_id']}")
-    candidates = _client().search_drugs(query) if query else []
-    options = [c["trade_name"] for c in candidates]
+            try:
+                report = _client().doctor_check([d1_input.strip(), d2_input.strip()])
+                findings = report.get("findings") or []
+                pair_finding = find_interaction_for_pair(d1_input.strip(), d2_input.strip(), findings)
 
-    choice = ""
-    if options:
-        choice = st.selectbox("اختر الدواء الصحيح المعتمد:", options, key=f"rev_choice_{selected_scan['scan_id']}")
-    elif query:
-        st.warning("لم يتم العثور على دواء مطابق — تحقق من صحة كتابة الاسم الإنجليزي.")
+                render_pair_card_and_editor(
+                    drug_a=d1_input.strip(),
+                    drug_b=d2_input.strip(),
+                    finding=pair_finding,
+                    client=_client(),
+                    key_prefix="standalone_pair_rev",
+                )
+            except ApiError as exc:
+                st.error(f"خطأ أثناء فحص التعارض: {exc}")
+        else:
+            st.warning("يرجى كتابة اسم الدواء الأول والدواء الثاني لبدء المراجعة.")
 
-    reviewed_by = st.text_input("اسم أو صفة المراجع", value="صيدلاني", key=f"rev_by_{selected_scan['scan_id']}")
+    # ── TAB 2: OCR Scan Inspection & Training ────────────────────────────────
+    with rev_tabs[1]:
+        st.markdown("### 📷 مراجعة وتصحيح قراءة عبوات الأدوية (تدريب OCR)")
+        st.caption(
+            "اختر الفحص الذي تم التعرف عليه عبر الكاميرا أو الصورة، وحدد الدواء المعتمد "
+            "لتدريب القاموس الذكي على عدم تكرار الخطأ مستقبلاً:"
+        )
 
-    if st.button("💾 اعتماد وتدريب التصحيح في النظام", type="primary", key=f"btn_save_rev_{selected_scan['scan_id']}"):
-        if not raw_text.strip() or not choice:
-            st.warning("يجب توفير كل من النص المقروء والدواء الصحيح.")
-            return
         try:
-            report = _client().doctor_review(int(selected_scan["scan_id"]), raw_text, choice, reviewed_by)
-            st.success(f"🎉 تم تعلم التصحيح بنجاح! تم ربط النص “{raw_text.strip()}” بالدواء المعتمد **{choice}**. سيتم التعرف عليه تلقائيًا في جميع الفحوصات القادمة.")
-            render_report(report)
+            scans = _client().recent_scans(limit=30)
         except ApiError as exc:
-            st.error(str(exc))
+            st.error(f"تعذر جلب الفحوصات الأخيرة: {exc}")
+            scans = []
+
+        if not scans:
+            st.warning("لا توجد فحوصات مسجلة بعد. قم بتصوير عبوة دواء في تبويب (📷 فحص صورة عبوة) لتظهر هنا.")
+            return
+
+        scan_options = {}
+        for s in scans:
+            s_id = s["scan_id"]
+            ocr_preview = (s["ocr_raw_text"] or "").replace("\n", " ").strip()
+            if len(ocr_preview) > 35:
+                ocr_preview = ocr_preview[:32] + "..."
+            ocr_preview = ocr_preview or "بدون نص"
+            res = s.get("classifier_prediction") or s.get("matched_drug_id") or "غير محدد"
+            status_ar = REVIEW_STATUS_AR.get(s["review_status"], s["review_status"])
+            label = f"فحص #{s_id} | الدواء المكتشف: [{res}] | النص: [{ocr_preview}] | الحالة: [{status_ar}]"
+            scan_options[label] = s
+
+        selected_label = st.selectbox("📌 اختر الفحص المراد مراجعته وتدريبه:", list(scan_options.keys()))
+        selected_scan = scan_options[selected_label]
+
+        with st.container(border=True):
+            col1, col2 = st.columns(2)
+            with col1:
+                st.markdown(f"**رقم الفحص (Scan ID):** `#{selected_scan['scan_id']}`")
+                st.markdown(f"**حالة المراجعة الحالية:** `{REVIEW_STATUS_AR.get(selected_scan['review_status'], selected_scan['review_status'])}`")
+                if selected_scan.get("reviewed_by"):
+                    st.markdown(f"**تمت المراجعة بواسطة:** `{selected_scan['reviewed_by']}`")
+            with col2:
+                st.markdown(f"**توقع النموذج:** `{selected_scan.get('classifier_prediction') or '—'}`")
+                st.markdown(f"**نسبة الثقة:** `{selected_scan.get('fused_confidence', 0):.0%}`")
+
+            raw_text = st.text_area(
+                "النص الخام الذي قرأه الـ OCR من العبوة (يمكنك تعديله لتدريب الكلمات الدقيقة):",
+                value=selected_scan.get("ocr_raw_text", ""),
+                height=70,
+                key=f"rev_ocr_{selected_scan['scan_id']}",
+            )
+
+            st.markdown("#### حدد الدواء الصحيح من قاعدة البيانات:")
+            query = st.text_input("ابحث باسم الدواء التجاري أو العلمي (مثال: Panadol أو Aspirin)", key=f"rev_q_{selected_scan['scan_id']}")
+            candidates = _client().search_drugs(query) if query else []
+            options = [c["trade_name"] for c in candidates]
+
+            choice = ""
+            if options:
+                choice = st.selectbox("اختر الدواء الصحيح المعتمد:", options, key=f"rev_choice_{selected_scan['scan_id']}")
+            elif query:
+                st.warning("لم يتم العثور على دواء مطابق — تحقق من صحة كتابة الاسم الإنجليزي.")
+
+            reviewed_by = st.text_input("اسم أو صفة المراجع", value="صيدلاني", key=f"rev_by_{selected_scan['scan_id']}")
+
+            if st.button("💾 اعتماد وتدريب التصحيح في النظام", type="primary", key=f"btn_save_rev_{selected_scan['scan_id']}"):
+                if not raw_text.strip() or not choice:
+                    st.warning("يجب توفير كل من النص المقروء والدواء الصحيح.")
+                    return
+                try:
+                    report = _client().doctor_review(int(selected_scan["scan_id"]), raw_text, choice, reviewed_by)
+                    st.success(f"🎉 تم تعلم التصحيح بنجاح! تم ربط النص “{raw_text.strip()}” بالدواء المعتمد **{choice}**. سيتم التعرف عليه تلقائيًا في جميع الفحوصات القادمة.")
+                    render_report(report)
+                except ApiError as exc:
+                    st.error(str(exc))
 
 
 def render_doctor_page() -> None:

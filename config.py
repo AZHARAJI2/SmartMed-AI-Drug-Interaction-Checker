@@ -34,10 +34,10 @@ class DataConfig:
 class QualityConfig:
     """Image quality gate thresholds (a failing check rejects the image instantly)."""
 
-    min_resolution: int = 128          # shortest side, pixels
-    blur_threshold: float = 45.0       # variance of Laplacian (lower = blurrier)
-    brightness_min: float = 35.0       # mean V-channel 0..255
-    brightness_max: float = 235.0
+    min_resolution: int = 80           # shortest side, pixels (relaxed for camera/cropped images)
+    blur_threshold: float = 12.0       # variance of Laplacian (relaxed from 45.0 for real-world cameras)
+    brightness_min: float = 12.0       # mean V-channel 0..255 (relaxed for indoor webcam captures)
+    brightness_max: float = 245.0      # relaxed to accommodate packaging reflections
 
 
 @dataclass(frozen=True)

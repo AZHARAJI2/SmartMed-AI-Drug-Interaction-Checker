@@ -267,4 +267,30 @@ class TestScanEndpoints:
         })
         assert response.status_code == 404
 
+    def test_doctor_interaction_override(self, client):
+        # 1. Override: set interaction between Paracetamol and Warfarin to Major
+        res1 = client.post("/doctor/interaction/override", json={
+            "drug_a": "paracetamol",
+            "drug_b": "warfarin",
+            "has_interaction": True,
+            "severity": "Major",
+            "description": "Risk of bleeding on prolonged use",
+            "reviewed_by": "Dr. Azhar",
+        })
+        assert res1.status_code == 200
+        data1 = res1.json()
+        assert len(data1["findings"]) >= 1
+        assert any(f["severity"] == "Major" for f in data1["findings"])
+
+        # 2. Override: remove interaction (set has_interaction=False)
+        res2 = client.post("/doctor/interaction/override", json={
+            "drug_a": "paracetamol",
+            "drug_b": "warfarin",
+            "has_interaction": False,
+            "reviewed_by": "Dr. Azhar",
+        })
+        assert res2.status_code == 200
+        data2 = res2.json()
+        assert len(data2["findings"]) == 0
+
 

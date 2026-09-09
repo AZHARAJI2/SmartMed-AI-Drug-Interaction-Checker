@@ -118,6 +118,14 @@ class ScanPipeline:
             if match is not None and match.score > best_score:
                 ocr_label, best_score = match.matched, match.score
 
+        # Fallback: if fuzzy matcher did not match a DB drug, use the cleanest plausible text line
+        if not ocr_label and ocr_result.texts:
+            for text in ocr_result.texts:
+                cleaned = self.cleaner.clean(text)
+                if cleaned and not any(j in cleaned.lower() for j in self.config.split.junk_keywords):
+                    ocr_label = cleaned
+                    break
+
         prediction = self.predictor.predict(enhanced) if self.predictor is not None else None
         classifier_label = prediction.label if prediction else ""
         classifier_confidence = prediction.confidence if prediction else 0.0

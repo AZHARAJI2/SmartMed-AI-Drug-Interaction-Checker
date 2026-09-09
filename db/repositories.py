@@ -128,6 +128,42 @@ class InteractionRepository:
                     found.append(interaction)
         return found
 
+    def set_or_update(
+        self,
+        ingredient_a_id: int,
+        ingredient_b_id: int,
+        severity: str,
+        description: str = "",
+        source: str = "مراجعة الطبيب",
+    ) -> Interaction:
+        a, b = sorted((ingredient_a_id, ingredient_b_id))
+        pair = self.get_pair(a, b)
+        if pair is not None:
+            pair.severity = severity
+            pair.description = description
+            pair.source = source
+            self.session.flush()
+            return pair
+        interaction = Interaction(
+            ingredient_a_id=a,
+            ingredient_b_id=b,
+            severity=severity,
+            description=description,
+            source=source,
+        )
+        self.session.add(interaction)
+        self.session.flush()
+        return interaction
+
+    def remove_pair(self, ingredient_a_id: int, ingredient_b_id: int) -> bool:
+        a, b = sorted((ingredient_a_id, ingredient_b_id))
+        pair = self.get_pair(a, b)
+        if pair is not None:
+            self.session.delete(pair)
+            self.session.flush()
+            return True
+        return False
+
 
 class UserRepository:
     def __init__(self, session: Session) -> None:

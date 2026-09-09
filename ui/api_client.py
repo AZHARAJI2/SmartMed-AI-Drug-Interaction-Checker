@@ -136,6 +136,18 @@ class ApiClient:
             "corrected_by": corrected_by,
         }).json()
 
+    def override_interaction(self, drug_a: str, drug_b: str, has_interaction: bool,
+                             severity: str = "Moderate", description: str = "",
+                             reviewed_by: str = "طبيب / صيدلاني") -> dict:
+        return self._request("POST", "/doctor/interaction/override", json={
+            "drug_a": drug_a,
+            "drug_b": drug_b,
+            "has_interaction": has_interaction,
+            "severity": severity,
+            "description": description,
+            "reviewed_by": reviewed_by,
+        }).json()
+
     def search_drugs(self, q: str = "", limit: int = 25) -> list[dict]:
         return self._request("GET", "/doctor/drugs",
                              params={"q": q, "limit": limit}).json()

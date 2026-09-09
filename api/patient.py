@@ -81,9 +81,9 @@ def add_medication(
     session: Session = Depends(get_db_session),
 ) -> MedicationOut:
     name = payload.drug_name.strip()
-    drug, _in_db = _resolve_or_create_drug(name, session)
+    drug, in_db = _resolve_or_create_drug(name, session)
     MedicationRepository(session).add(patient.id, drug.id)
-    return MedicationOut(drug_id=drug.id, drug_name=drug.trade_name)
+    return MedicationOut(drug_id=drug.id, drug_name=drug.trade_name, in_db=in_db)
 
 
 @router.get("/medications", response_model=list[MedicationOut])
@@ -96,7 +96,12 @@ def list_medications(
     for record in MedicationRepository(session).list_for_patient(patient.id):
         drug = drug_repo.get(record.drug_id)
         if drug is not None:
-            out.append(MedicationOut(drug_id=drug.id, drug_name=drug.trade_name))
+            has_ingredients = len(drug_repo.ingredient_ids_of(drug)) > 0
+            out.append(MedicationOut(
+                drug_id=drug.id,
+                drug_name=drug.trade_name,
+                in_db=has_ingredients,
+            ))
     return out
 
 

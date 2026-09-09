@@ -10,6 +10,7 @@ from sqlalchemy.orm import Session
 from api.deps import get_correction_logger, get_db_session, get_interaction_checker, get_scan_pipeline
 from api.schemas import (
     DoctorCheckRequest,
+    DoctorInteractionOverrideRequest,
     DoctorReviewRequest,
     DrugOut,
     InteractionFindingOut,
@@ -19,7 +20,7 @@ from api.schemas import (
 )
 from core.engine import InteractionChecker, InteractionReport
 from core.scan_pipeline import ScanPipeline
-from db.repositories import DrugRepository, ScanLogRepository
+from db.repositories import DrugRepository, IngredientRepository, InteractionRepository, ScanLogRepository
 
 router = APIRouter(prefix="/doctor", tags=["doctor_tool"])
 
@@ -117,6 +118,48 @@ def review_correction(
         entry.matched_drug_id = drug.id
         session.flush()
     return _report_out(checker.check_drug_names([drug.trade_name]))
+
+
+@router.post("/interaction/override", response_model=InteractionReportOut)
+def override_interaction(
+    payload: DoctorInteractionOverrideRequest,
+    checker: InteractionChecker = Depends(get_interaction_checker),
+    session: Session = Depends(get_db_session),
+) -> InteractionReportOut:
+    """Doctor/pharmacist confirms or modifies whether two drugs interact, setting custom verdict."""
+    drug_repo = DrugRepository(session)
+    ing_repo = IngredientRepository(session)
+    interaction_repo = InteractionRepository(session)
+
+    clean_a = payload.drug_a.strip()
+    clean_b = payload.drug_b.strip()
+
+    # Resolve or create ingredient for drug_a
+    ing_a = checker._resolve(clean_a)
+    if ing_a is None:
+        ing_a = ing_repo.add(clean_a.title())
+        drug_repo.add(clean_a.title(), [ing_a.id])
+
+    # Resolve or create ingredient for drug_b
+    ing_b = checker._resolve(clean_b)
+    if ing_b is None:
+        ing_b = ing_repo.add(clean_b.title())
+        drug_repo.add(clean_b.title(), [ing_b.id])
+
+    if payload.has_interaction:
+        desc = payload.description.strip() or f"تعارض سريري معتمد بواسطة: {payload.reviewed_by}"
+        interaction_repo.set_or_update(
+            ing_a.id,
+            ing_b.id,
+            severity=payload.severity or "Moderate",
+            description=desc,
+            source=f"مراجعة الطبيب ({payload.reviewed_by})",
+        )
+    else:
+        interaction_repo.remove_pair(ing_a.id, ing_b.id)
+
+    session.flush()
+    return _report_out(checker.check_drug_names([clean_a, clean_b]))
 
 
 def cv2_imdecode(data: bytes):

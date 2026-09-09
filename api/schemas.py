@@ -30,6 +30,7 @@ class MedicationRequest(BaseModel):
 class MedicationOut(BaseModel):
     drug_id: int
     drug_name: str
+    in_db: bool = True
 
 
 class InteractionFindingOut(BaseModel):
@@ -58,6 +59,15 @@ class DoctorReviewRequest(BaseModel):
     raw_ocr_text: str = Field(min_length=1)
     corrected_drug_name: str = Field(min_length=1)
     corrected_by: str = Field(default="pharmacist", max_length=255)
+
+
+class DoctorInteractionOverrideRequest(BaseModel):
+    drug_a: str = Field(min_length=1)
+    drug_b: str = Field(min_length=1)
+    has_interaction: bool
+    severity: str = Field(default="Moderate")
+    description: str = Field(default="")
+    reviewed_by: str = Field(default="طبيب / صيدلاني")
 
 
 class DrugOut(BaseModel):
